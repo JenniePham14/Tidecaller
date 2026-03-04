@@ -6,9 +6,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
 import { MaterialIcons } from 'react-native-vector-icons/MaterialIcons';
 
-
-
-import { auth } from '../backend/firebaseConfig';
+import { auth, firestore } from '../backend/firebaseConfig';
 import { getFirestore, doc, setDoc, getDoc } from 'firebase/firestore';
 
 
@@ -94,7 +92,6 @@ const SignUpScreen = ({ navigation }) => {
     useEffect( () => {
 
       async function createUserInFirestore(){
-        const firestore = getFirestore();
         const userData = doc(firestore, `user/${auth.currentUser.uid}`)
 
         console.log(`CREATING USER DATA: user/${auth.currentUser.uid}`)
