@@ -3,12 +3,14 @@ import { Dimensions, StyleSheet, View, Text } from 'react-native';
 import MapView, { Callout, Marker } from 'react-native-maps';
 import { GooglePlacesAutocomplete } from 'react-native-google-places-autocomplete';
 import * as Location from 'expo-location';
-import { distance } from '../screens/HomeScreen.js'
+import { distance } from '../screens/HomeScreen.js';
 import { MaterialIcons } from '@expo/vector-icons';
 import { FontAwesome } from '@expo/vector-icons';
 
+import { useNavigation } from '@react-navigation/native'; 
+
 import { auth, firestore } from '../backend/firebaseConfig';
-import { doc, getDoc, updateDoc, arrayUnion, arrayRemove } from '@firebase/firestore';
+import { doc, getDoc, updateDoc, arrayUnion, arrayRemove } from 'firebase/firestore'; 
 
 let favList = [];
 function buildFavArray(name, add) {
@@ -36,7 +38,6 @@ export function favArray() {
 }
 
 function beenClicked(name) {
-  console.log(name)
   for (let i = 0; i < favList.length; i++) {
     if (favList[i] === name) {
       return true;
@@ -46,15 +47,15 @@ function beenClicked(name) {
 }
 
 const MapScreen = () => {
+  const navigation = useNavigation(); 
+
   const [favClicked, setFavClicked] = useState(false);
   const mapRef = useRef(null);
   const [favSet, setFavSet] = useState(false);
   const [station, setStation] = useState([]);
   const [nearby, setNearby] = useState({
     state: "",
-    tidepredoffsets: {
-      self: ""
-    },
+    tidepredoffsets: { self: "" },
     type: "",
     timemeridian: 0,
     reference_id: 0,
@@ -90,20 +91,26 @@ const MapScreen = () => {
   }
 
   function calcNearby(latitude, longitude) {
+    if (!station || station.length === 0) return null; // guard
+
     const lat = latitude;
     const lng = longitude;
 
-    let closest = station[0]
+    let closest = station[0];
     let closestDistance = distance(closest.lat, closest.lng, lat, lng);
+
     for (let i = 1; i < station.length; i++) {
-      stationDistance = distance(station[i].lat, station[i].lng, lat, lng)
+      const stationDistance = distance(station[i].lat, station[i].lng, lat, lng);
       if (stationDistance < closestDistance) {
         closestDistance = stationDistance;
         closest = station[i];
       }
     }
+
     setNearby(closest);
     markerPressed(closest);
+
+    return closest; 
   }
 
   function calcNearbyArray(latitude, longitude) {
@@ -112,16 +119,16 @@ const MapScreen = () => {
     var distances = new Map();
 
     for (let i = 0; i < station.length; i++) {
-      stationDistance = distance(station[i].lat, station[i].lng, lat, lng)
+      const stationDistance = distance(station[i].lat, station[i].lng, lat, lng);
       distances.set(stationDistance, i);
     }
+
     distances = new Map([...distances.entries()].sort((a, b) => a[0] - b[0]));
     let tenClosestIndex = [];
     let counter = 0;
+
     for (let [key, value] of distances) {
-      if (counter === 10) {
-        break;
-      }
+      if (counter === 10) break;
       tenClosestIndex.push(value);
       counter++;
     }
@@ -131,7 +138,12 @@ const MapScreen = () => {
       names.push({
         number: tenClosestIndex[i],
         description: station[tenClosestIndex[i]].name,
-        geometry: { location: { lat: station[tenClosestIndex[i]].lat, lng: station[tenClosestIndex[i]].lng } }
+        geometry: {
+          location: {
+            lat: station[tenClosestIndex[i]].lat,
+            lng: station[tenClosestIndex[i]].lng
+          }
+        }
       });
     }
     return names;
@@ -152,6 +164,7 @@ const MapScreen = () => {
       let currentLocation = await Location.getCurrentPositionAsync({});
       setLocation(currentLocation);
     };
+
     getPermissions();
     fetchStation();
   }, [])
@@ -169,8 +182,9 @@ const MapScreen = () => {
       longitude: e.lng,
       latitudeDelta: 0.02,
       longitudeDelta: 0.02
-    })
-    mapRef.current.animateToRegion(goToPoint, 500);
+    });
+
+    mapRef.current?.animateToRegion(goToPoint, 500);
   };
 
   const markPressed = (m) => {
@@ -180,76 +194,67 @@ const MapScreen = () => {
       latitudeDelta: 0.046,
       longitudeDelta: 0.046,
     };
+
     if (m.marker === 'marker-press') {
       goToPoint.longitude = m.coordinate.longitude;
       goToPoint.latitude = m.coordinate.latitude;
       goToPoint.latitudeDelta = 0.02;
       goToPoint.longitudeDelta = 0.02;
+
       setMarkerCoords({
         longitude: m.coordinate.longitude,
         latitude: m.coordinate.latitude,
         latitudeDelta: 0.02,
         longitudeDelta: 0.02,
-      })
-    }
-    else if (m.marker === "marker-inside-overlay-press") {
+      });
+    } else if (m.marker === "marker-inside-overlay-press" && markerCoords) {
       goToPoint.longitude = markerCoords.longitude;
       goToPoint.latitude = markerCoords.latitude;
       goToPoint.latitudeDelta = markerCoords.latitudeDelta;
       goToPoint.longitudeDelta = markerCoords.longitudeDelta;
     }
-    //console.log(m.marker);
-    //@ts-ignore
-    mapRef.current.animateToRegion(goToPoint, 500);
+
+    mapRef.current?.animateToRegion(goToPoint, 500);
   };
 
   let currentLat = 34.06935;
   let currentLng = -118.44468;
   let stationInfo = [];
+
   if (location) {
     currentLat = location.coords.latitude;
     currentLng = location.coords.longitude;
     stationInfo = calcNearbyArray(currentLat, currentLng);
   }
 
-  //console.log(region);
-
-
-  //user stuff
+  // user stuff (existing)
   const [userId, setUserId] = useState("bruh");
   const [favoriteData, setFavoriteData] = useState([]);
 
-  //finds the userId
   useEffect(() => {
     if (auth.currentUser?.uid != null) {
       setUserId(auth.currentUser.uid)
-    }
-    else {
+    } else {
       console.log("user not logged in")
     }
   }, [])
 
-  //get the user's favorite data
-  const favoriteRef = doc(firestore, "user", userId)
-  useEffect(() => {
+  const favoriteRef = doc(firestore, "user", userId);
 
+  useEffect(() => {
     async function getFavoriteData() {
       const favoriteSnap = await getDoc(favoriteRef);
 
       if (favoriteSnap.exists()) {
-        console.log("Favorite Data: ", favoriteSnap.data().favoriteSpots);
         setFavoriteData(favoriteSnap.data().favoriteSpots)
-      }
-      else {
+      } else {
         console.log("No Favorite Data")
       }
     }
     getFavoriteData();
-
   }, [userId])
 
   useEffect(() => {
-
     let favoriteList2 = [];
 
     for (let i = 0; i < favoriteData.length; i++) {
@@ -276,29 +281,40 @@ const MapScreen = () => {
 
   return (
     <View>
-      <View style={{ marginTop: 1, flex: 1, backgroundColor:"#084254" }}>
+      <View style={{ marginTop: 1, flex: 1, backgroundColor: "#084254" }}>
         <GooglePlacesAutocomplete
           placeholder='Search'
           fetchDetails={true}
-          GooglePlacesSearchQuery={{
-            rankby: "distance"
-          }}
+          GooglePlacesSearchQuery={{ rankby: "distance" }}
           onPress={(data, details) => {
-            // 'details' is provided when fetchDetails = true
-            //console.log(data, details);
+            // ✅ ADDED GUARD
+            if (!details?.geometry?.location) return;
+
+            // existing behavior: update star state based on clicked
             if (!beenClicked(details.description)) {
               setFavClicked(false);
-            }
-            else {
+            } else {
               setFavClicked(true);
             }
+
+            const lat = details.geometry.location.lat;
+            const lng = details.geometry.location.lng;
+
             setRegion({
-              latitude: details.geometry.location.lat,
-              longitude: details.geometry.location.lng,
+              latitude: lat,
+              longitude: lng,
               latitudeDelta: 0.0922,
               longitudeDelta: 0.0421
             });
-            calcNearby(details.geometry.location.lat, details.geometry.location.lng);
+
+            // ✅ KEY CHANGE: get closest station and navigate Home
+            const closest = calcNearby(lat, lng);
+            if (closest?.id && closest?.name) {
+              navigation.navigate("Home", {
+                stationID: closest.id,
+                stationName: closest.name,
+              });
+            }
           }}
           query={{
             key: 'AIzaSyCtlqDstZqTuGiimjz5bOggecVpbILC5Ko',
@@ -312,6 +328,7 @@ const MapScreen = () => {
             listView: { backgroundColor: "white" }
           }}
         />
+
         <MapView
           style={styles.map}
           region={{
@@ -327,67 +344,70 @@ const MapScreen = () => {
               coordinate: e.nativeEvent.coordinate,
               marker: e.nativeEvent.action,
             })
-          }>
-          <Marker coordinate={{
-            //region instead of nearby
-            latitude: nearby.lat,
-            longitude: nearby.lng
-          }}
+          }
+        >
+          <Marker
+            coordinate={{
+              latitude: nearby.lat,
+              longitude: nearby.lng
+            }}
           >
             <Callout tooltip>
               <View>
                 <View style={styles.bubble}>
                   <Text style={styles.name}> {nearby.name} </Text>
                 </View>
-                <View style={styles.arrowBorder}/>
-                <View style={styles.arrow}/>
-             </View>
+                <View style={styles.arrowBorder} />
+                <View style={styles.arrow} />
+              </View>
             </Callout>
           </Marker>
-          <Marker coordinate={{
-            latitude: currentLat,
-            longitude: currentLng
-          }}>
+
+          <Marker
+            coordinate={{
+              latitude: currentLat,
+              longitude: currentLng
+            }}
+          >
             <View>
               <MaterialIcons name="location-history" size={40} color="#1c4152" />
             </View>
           </Marker>
         </MapView>
       </View>
-          <View style={styles.favoritedTextBar}>
-            <Text style={styles.favoritedText}> 
-            {nearby.name} 
-            </Text>
-            <FontAwesome 
-              name={favClicked ? "star" : "star-o"}
-              size={24}
-              color={favClicked ? "#FFD233" : "white"}
-              onPress={() => {
-                setFavClicked(!favClicked);
-                buildFavArray(nearby.name, nearby.id, !favClicked);
-                updateUserFavorites(nearby.name, nearby.id, !favClicked);
-              }}
-            />
-          </View>
+
+      <View style={styles.favoritedTextBar}>
+        <Text style={styles.favoritedText}>
+          {nearby.name}
+        </Text>
+        <FontAwesome
+          name={favClicked ? "star" : "star-o"}
+          size={24}
+          color={favClicked ? "#FFD233" : "white"}
+          onPress={() => {
+            setFavClicked(!favClicked);
+            buildFavArray(nearby.name, !favClicked);
+            updateUserFavorites(nearby.name, nearby.id, !favClicked);
+          }}
+        />
       </View>
+    </View>
   );
 };
 
-  const styles = StyleSheet.create({
-    container: {
-      ...StyleSheet.absoluteFillObject,
-      flex: 1,
-      backgroundColor: "#fff",
-      alignItems: "center",
-      justifyContent: "center"
-    },
-    map: {
-      ...StyleSheet.absoluteFillObject,
-      height: Dimensions.get("window").height * .82,
-      //width: Dimensions.get("window").width,
-      //height: Dimensions.get("window").height
-    },
-    bubble: {
+const styles = StyleSheet.create({
+  container: {
+    ...StyleSheet.absoluteFillObject,
+    flex: 1,
+    backgroundColor: "#fff",
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  map: {
+    ...StyleSheet.absoluteFillObject,
+    height: Dimensions.get("window").height * .82,
+  },
+  bubble: {
     flexDirection: "row",
     alignSelf: 'align-self',
     backgroundColor: "#356C81",
@@ -395,64 +415,64 @@ const MapScreen = () => {
     borderColor: "#356C81",
     borderWidth: 0.5,
     padding: 5,
-    width: 300, 
-    },
-    name: {
-      fontSize: 20,
-      marginBottom: 5,
-      textAlign: 'center',
-      ontWeight: 'bold',
-      alignSelf: 'flex-start',
-      position: 'relative',
-      paddingLeft: 10,
-      color: "white"
-    },
-    arrow: {
-      backgroundColor: 'transparent',
-      borderColor: 'transparent',
-      borderTopColor: '#356C81',
-      borderWidth: 16,
-      alignSelf: 'center',
-      marginTop: -32,
-    },
-    arrowBorder: {
-      backgroundColor: 'transparent',
-      borderColor: 'transparent',
-      borderTopColor: '#007a87',
-      borderWidth: 16,
-      alignSelf: 'center',
-      marginTop: -0.5,
-    },
-    favButton: {
-      alignItems: 'center',
-      justifyContent: 'center',
-      paddingVertical: 12,
-      paddingHorizontal: 32,
-      borderRadius: 4,
-      elevation: 3,
-    },
-    favoritedText: {
-      display: 'flex',
-      fontWeight: 'bold',
-      color: "white",
-      paddingRight: 15,
-      fontSize: 20,
-    },
-    favoritedTextBar: {
-      justifyContent: 'center',
-      alignItems: 'center',
-      flexDirection: 'row',
-      marginTop: 750,
-      backgroundColor: "#084254",
-      overflow : "hidden",
-      paddingVertical: 30,
-    },
-    gradient:{
-      flex: 1,
-      backgroundColor: '#0a2d39',
-      alignItems: 'center',
-      justifyContent: 'center',
-    }
-  })
+    width: 300,
+  },
+  name: {
+    fontSize: 20,
+    marginBottom: 5,
+    textAlign: 'center',
+    fontWeight: 'bold',
+    alignSelf: 'flex-start',
+    position: 'relative',
+    paddingLeft: 10,
+    color: "white"
+  },
+  arrow: {
+    backgroundColor: 'transparent',
+    borderColor: 'transparent',
+    borderTopColor: '#356C81',
+    borderWidth: 16,
+    alignSelf: 'center',
+    marginTop: -32,
+  },
+  arrowBorder: {
+    backgroundColor: 'transparent',
+    borderColor: 'transparent',
+    borderTopColor: '#007a87',
+    borderWidth: 16,
+    alignSelf: 'center',
+    marginTop: -0.5,
+  },
+  favButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 32,
+    borderRadius: 4,
+    elevation: 3,
+  },
+  favoritedText: {
+    display: 'flex',
+    fontWeight: 'bold',
+    color: "white",
+    paddingRight: 15,
+    fontSize: 20,
+  },
+  favoritedTextBar: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexDirection: 'row',
+    marginTop: 750,
+    backgroundColor: "#084254",
+    overflow: "hidden",
+    paddingVertical: 30,
+  },
+  gradient: {
+    flex: 1,
+    backgroundColor: '#0a2d39',
+    alignItems: 'center',
+    justifyContent: 'center',
+  }
+});
 
 export default MapScreen;
