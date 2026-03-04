@@ -1,13 +1,12 @@
-import { StyleSheet, Text, Touchable, TouchableOpacity, View, TextInput, SafeAreaView} from 'react-native';
+import { StyleSheet, Text, TouchableOpacity, View, TextInput} from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { useState, useEffect } from 'react';
-import { Link, NavigationContainerRefContext, useNavigation } from '@react-navigation/native';
+import { useNavigation } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
-import { MaterialIcons } from 'react-native-vector-icons/MaterialIcons';
 
 import { auth, firestore } from '../backend/firebaseConfig';
-import { getFirestore, doc, setDoc, getDoc } from 'firebase/firestore';
+import { doc, setDoc } from 'firebase/firestore';
 
 
 const SignUpScreen = ({ navigation }) => {
@@ -117,7 +116,7 @@ const SignUpScreen = ({ navigation }) => {
 
 
   return (
-    <SafeAreaView style={{flex: 1, backgroundColor: '#081319'}}> 
+    
     <LinearGradient
       style={styles.container}
       colors={["#084254", "#081319"]}
@@ -175,7 +174,7 @@ const SignUpScreen = ({ navigation }) => {
 
 
       </LinearGradient>
-    </SafeAreaView>
+    
   );
 }
 
