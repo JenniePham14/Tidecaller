@@ -66,5 +66,5 @@ Originally, map screen relied on Google Places API and since the original projec
         - renders them into list
 
 ## API References: 
-https://tidesandcurrents.noaa.gov/web_services_info.html 
-https://nominatim.org/ 
+- https://tidesandcurrents.noaa.gov/web_services_info.html 
+- https://nominatim.org/ 
