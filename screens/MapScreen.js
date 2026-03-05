@@ -1,478 +1,240 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Dimensions, StyleSheet, View, Text } from 'react-native';
-import MapView, { Callout, Marker } from 'react-native-maps';
-import { GooglePlacesAutocomplete } from 'react-native-google-places-autocomplete';
-import * as Location from 'expo-location';
-import { distance } from '../screens/HomeScreen.js';
-import { MaterialIcons } from '@expo/vector-icons';
-import { FontAwesome } from '@expo/vector-icons';
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { StyleSheet, View, Text, TextInput, Pressable, Keyboard } from "react-native";
+import MapView, { Marker, Callout } from "react-native-maps";
+import * as Location from "expo-location";
+import { useNavigation } from "@react-navigation/native";
+import { useTideStations } from "../hooks/useTideStations";
 
-import { useNavigation } from '@react-navigation/native'; 
-
-import { auth, firestore } from '../backend/firebaseConfig';
-import { doc, getDoc, updateDoc, arrayUnion, arrayRemove } from 'firebase/firestore'; 
-
-let favList = [];
-function buildFavArray(name, add) {
-  if (add) {
-    for (let i = 0; i < favList.length; i++) {
-      if (favList[i] === name) {
-        return;
-      }
-    }
-    favList.push(name);
-    return;
-  }
-  else {
-    for (let i = 0; i < favList.length; i++) {
-      if (favList[i] === name) {
-        favList.splice(i, 1);
-        return;
-      }
-    }
-  }
+// Since we are pinning all, this helps decide what coordinates are within 
+// a specific boundary of the map
+function inBounds(lat, lng, bounds) {
+  return (
+    lat >= bounds.minLat &&
+    lat <= bounds.maxLat &&
+    lng >= bounds.minLng &&
+    lng <= bounds.maxLng
+  );
 }
 
-export function favArray() {
-  return favList;
+// Converts the map area that user sees into a 'boundary' box, allows us to
+// only show NOAA stations inside of the boundary
+function regionToBounds(region) {
+  const { latitude, longitude, latitudeDelta, longitudeDelta } = region;
+  return {
+    minLat: latitude - latitudeDelta / 2,
+    maxLat: latitude + latitudeDelta / 2,
+    minLng: longitude - longitudeDelta / 2,
+    maxLng: longitude + longitudeDelta / 2,
+  };
 }
 
-function beenClicked(name) {
-  for (let i = 0; i < favList.length; i++) {
-    if (favList[i] === name) {
-      return true;
-    }
-  }
-  return false;
-}
+// Geocode with OpenStreetMap Nominatim (no API key)
+// *** Replaces Google Places AP!! ***
+// Converts user search into latitude and longitude coordinates
+async function geocodePlace(query) {
+  const url =
+    "https://nominatim.openstreetmap.org/search?format=json&limit=1&q=" +
+    encodeURIComponent(query);
 
-const MapScreen = () => {
-  const navigation = useNavigation(); 
-
-  const [favClicked, setFavClicked] = useState(false);
-  const mapRef = useRef(null);
-  const [favSet, setFavSet] = useState(false);
-  const [station, setStation] = useState([]);
-  const [nearby, setNearby] = useState({
-    state: "",
-    tidepredoffsets: { self: "" },
-    type: "",
-    timemeridian: 0,
-    reference_id: 0,
-    timezonecorr: 0,
-    id: "",
-    name: "",
-    lat: 0,
-    lng: 0,
-    affiliations: "",
-    portscode: "",
-    products: null,
-    disclaimers: null,
-    notices: null,
-    self: null,
-    expand: null,
-    tideType: ""
+  const res = await fetch(url, {
+    headers: {
+      // Nominatim recommendation
+      "User-Agent": "Tidecaller (demo)",
+    },
   });
-  const [location, setLocation] = useState(null);
-  const [markerCoords, setMarkerCoords] = useState(null);
-  const [pin, setPin] = useState({ latitude: 37.78825, longitude: -122.4324 });
+
+  if (!res.ok) throw new Error("Geocoding error:" + res.status);
+
+  const data = await res.json();
+  if (!data?.length) return null;
+
+  // Returns parsed coordinates
+  return {
+    lat: Number(data[0].lat),
+    lng: Number(data[0].lon),
+    displayName: data[0].display_name,
+  };
+}
+
+// Map Screen UI Components
+export default function MapScreen() {
+  const navigation = useNavigation();
+  // creates reference object to map so it is navigatible 
+  const mapRef = useRef(null);
+
+  const [searchText, setSearchText] = useState("");
+
+  // Sets default region, originally has always been UCLA
   const [region, setRegion] = useState({
     latitude: 34.06935,
     longitude: -118.44468,
-    latitudeDelta: 0.0922,
-    longitudeDelta: 0.0421
+    latitudeDelta: 0.25,
+    longitudeDelta: 0.25,
   });
 
-  const fetchStation = async () => {
-    const response = await fetch('https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations.json?type=tidepredictions&units=english');
-    const data = await response.json();
-    const stations = data.stations;
-    setStation(stations);
-  }
+  // Fetch NOAA stations using custom API hook
+  const { stations } = useTideStations()
 
-  function calcNearby(latitude, longitude) {
-    if (!station || station.length === 0) return null; // guard
+  // Original to previous, sets location to user's original location
+  useEffect(() => {
+    (async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== "granted") return;
 
-    const lat = latitude;
-    const lng = longitude;
+        const current = await Location.getCurrentPositionAsync({});
+        const next = {
+          latitude: current.coords.latitude,
+          longitude: current.coords.longitude,
+          latitudeDelta: 0.25,
+          longitudeDelta: 0.25,
+        };
+        setRegion(next);
+        mapRef.current?.animateToRegion(next, 500);
+      } catch (e) {
+      }
+    })();
+  }, []);
 
-    let closest = station[0];
-    let closestDistance = distance(closest.lat, closest.lng, lat, lng);
+  // Displaying NOAA Stations:
 
-    for (let i = 1; i < station.length; i++) {
-      const stationDistance = distance(station[i].lat, station[i].lng, lat, lng);
-      if (stationDistance < closestDistance) {
-        closestDistance = stationDistance;
-        closest = station[i];
+  // useMemo helps tp recalculate visible stations when the map changes
+  // so resets the boundaries
+  const visibleStations = useMemo(() => {
+    if (!stations?.length) return [];
+
+    const bounds = regionToBounds(region);
+
+    // filter stations in view
+    const inView = [];
+    // iterates thru all NOAA stations
+    for (let i = 0; i < stations.length; i++) {
+      const s = stations[i];
+      const lat = Number(s.lat);
+      const lng = Number(s.lng);
+
+      // displays stations that are within this visible map
+      if (Number.isFinite(lat) && Number.isFinite(lng) && inBounds(lat, lng, bounds)) {
+        inView.push({ ...s, lat, lng });
       }
     }
+    // caps the amount of pins to finite 150, since could have issues with too many
+    return inView.slice(0, 150);
+  }, [stations, region]);
 
-    setNearby(closest);
-    markerPressed(closest);
+  // Function to handle location search 
+  async function onSearch() {
+    const q = searchText.trim();
+    if (!q) return;
 
-    return closest; 
-  }
+    try {
+      Keyboard.dismiss();
 
-  function calcNearbyArray(latitude, longitude) {
-    const lat = latitude;
-    const lng = longitude;
-    var distances = new Map();
+      const result = await geocodePlace(q);
+      
+      const next = {
+        latitude: result.lat,
+        longitude: result.lng,
+        latitudeDelta: 0.25,
+        longitudeDelta: 0.25,
+      };
 
-    for (let i = 0; i < station.length; i++) {
-      const stationDistance = distance(station[i].lat, station[i].lng, lat, lng);
-      distances.set(stationDistance, i);
-    }
-
-    distances = new Map([...distances.entries()].sort((a, b) => a[0] - b[0]));
-    let tenClosestIndex = [];
-    let counter = 0;
-
-    for (let [key, value] of distances) {
-      if (counter === 10) break;
-      tenClosestIndex.push(value);
-      counter++;
-    }
-
-    var names = [];
-    for (let i = 0; i < tenClosestIndex.length; i++) {
-      names.push({
-        number: tenClosestIndex[i],
-        description: station[tenClosestIndex[i]].name,
-        geometry: {
-          location: {
-            lat: station[tenClosestIndex[i]].lat,
-            lng: station[tenClosestIndex[i]].lng
-          }
-        }
-      });
-    }
-    return names;
-  }
-
-  const favoriteSet = (e) => {
-    setFavSet(e);
-  }
-
-  useEffect(() => {
-    const getPermissions = async () => {
-      let { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        console.log("Please grant location permissions");
-        return;
-      }
-
-      let currentLocation = await Location.getCurrentPositionAsync({});
-      setLocation(currentLocation);
-    };
-
-    getPermissions();
-    fetchStation();
-  }, [])
-
-  const markerPressed = (e) => {
-    const goToPoint = {
-      longitude: e.lng,
-      latitude: e.lat,
-      latitudeDelta: 0.02,
-      longitudeDelta: 0.02
-    };
-
-    setRegion({
-      latitude: e.lat,
-      longitude: e.lng,
-      latitudeDelta: 0.02,
-      longitudeDelta: 0.02
-    });
-
-    mapRef.current?.animateToRegion(goToPoint, 500);
-  };
-
-  const markPressed = (m) => {
-    const goToPoint = {
-      longitude: region.longitude,
-      latitude: region.latitude,
-      latitudeDelta: 0.046,
-      longitudeDelta: 0.046,
-    };
-
-    if (m.marker === 'marker-press') {
-      goToPoint.longitude = m.coordinate.longitude;
-      goToPoint.latitude = m.coordinate.latitude;
-      goToPoint.latitudeDelta = 0.02;
-      goToPoint.longitudeDelta = 0.02;
-
-      setMarkerCoords({
-        longitude: m.coordinate.longitude,
-        latitude: m.coordinate.latitude,
-        latitudeDelta: 0.02,
-        longitudeDelta: 0.02,
-      });
-    } else if (m.marker === "marker-inside-overlay-press" && markerCoords) {
-      goToPoint.longitude = markerCoords.longitude;
-      goToPoint.latitude = markerCoords.latitude;
-      goToPoint.latitudeDelta = markerCoords.latitudeDelta;
-      goToPoint.longitudeDelta = markerCoords.longitudeDelta;
-    }
-
-    mapRef.current?.animateToRegion(goToPoint, 500);
-  };
-
-  let currentLat = 34.06935;
-  let currentLng = -118.44468;
-  let stationInfo = [];
-
-  if (location) {
-    currentLat = location.coords.latitude;
-    currentLng = location.coords.longitude;
-    stationInfo = calcNearbyArray(currentLat, currentLng);
-  }
-
-  // user stuff (existing)
-  const [userId, setUserId] = useState("bruh");
-  const [favoriteData, setFavoriteData] = useState([]);
-
-  useEffect(() => {
-    if (auth.currentUser?.uid != null) {
-      setUserId(auth.currentUser.uid)
-    } else {
-      console.log("user not logged in")
-    }
-  }, [])
-
-  const favoriteRef = doc(firestore, "user", userId);
-
-  useEffect(() => {
-    async function getFavoriteData() {
-      const favoriteSnap = await getDoc(favoriteRef);
-
-      if (favoriteSnap.exists()) {
-        setFavoriteData(favoriteSnap.data().favoriteSpots)
-      } else {
-        console.log("No Favorite Data")
-      }
-    }
-    getFavoriteData();
-  }, [userId])
-
-  useEffect(() => {
-    let favoriteList2 = [];
-
-    for (let i = 0; i < favoriteData.length; i++) {
-      if (!favoriteList2.includes(favoriteData[i].name)) {
-        favoriteList2.push(favoriteData[i].name)
-      }
-    }
-
-    favList = favoriteList2;
-  }, [favoriteData])
-
-  async function updateUserFavorites(placeName, placeID, addOrDelete) {
-    if (addOrDelete) {
-      await updateDoc(favoriteRef, {
-        favoriteSpots: arrayUnion({ "name": placeName, "id": placeID })
-      }).then(console.log("favorite update success"))
-    }
-    else {
-      await updateDoc(favoriteRef, {
-        favoriteSpots: arrayRemove({ "name": placeName, "id": placeID })
-      }).then(console.log("favorite remove success"))
+      // Moves map to the location user searched
+      setRegion(next);
+      mapRef.current?.animateToRegion(next, 700);
+    } catch (e) {
+      console.log(e);
     }
   }
 
+  // UI layout/loading for MapScreen.js
   return (
-    <View>
-      <View style={{ marginTop: 1, flex: 1, backgroundColor: "#084254" }}>
-        <GooglePlacesAutocomplete
-          placeholder='Search'
-          fetchDetails={true}
-          GooglePlacesSearchQuery={{ rankby: "distance" }}
-          onPress={(data, details) => {
-            // ✅ ADDED GUARD
-            if (!details?.geometry?.location) return;
-
-            // existing behavior: update star state based on clicked
-            if (!beenClicked(details.description)) {
-              setFavClicked(false);
-            } else {
-              setFavClicked(true);
-            }
-
-            const lat = details.geometry.location.lat;
-            const lng = details.geometry.location.lng;
-
-            setRegion({
-              latitude: lat,
-              longitude: lng,
-              latitudeDelta: 0.0922,
-              longitudeDelta: 0.0421
-            });
-
-            // ✅ KEY CHANGE: get closest station and navigate Home
-            const closest = calcNearby(lat, lng);
-            if (closest?.id && closest?.name) {
-              navigation.navigate("Home", {
-                stationID: closest.id,
-                stationName: closest.name,
-              });
-            }
-          }}
-          query={{
-            key: 'AIzaSyCtlqDstZqTuGiimjz5bOggecVpbILC5Ko',
-            language: 'en',
-            radius: 30000,
-            location: `${currentLat}, ${currentLng}`
-          }}
-          predefinedPlaces={stationInfo}
-          styles={{
-            container: { flex: 0, position: "absolute", width: "100%", zIndex: 1 },
-            listView: { backgroundColor: "white" }
-          }}
+    <View style={styles.root}>
+      <View style={styles.searchBar}> 
+        <TextInput
+          value={searchText}
+          onChangeText={setSearchText}
+          placeholder="Search a city or place (ex. San Diego)"
+          placeholderTextColor="#cfd8dc"
+          style={styles.searchInput}
+          returnKeyType="search"
+          onSubmitEditing={onSearch}
         />
+        <Pressable onPress={onSearch} style={styles.searchButton}>
+          <Text style={styles.searchButtonText}>Go</Text>
+        </Pressable>
+      </View>
 
-        <MapView
-          style={styles.map}
-          region={{
-            latitude: currentLat,
-            longitude: currentLng,
-            latitudeDelta: 0.0922,
-            longitudeDelta: 0.0421,
-          }}
-          provider="google"
-          ref={mapRef}
-          onPress={(e) =>
-            markPressed({
-              coordinate: e.nativeEvent.coordinate,
-              marker: e.nativeEvent.action,
-            })
-          }
-        >
+      <MapView
+        ref={mapRef}
+        style={styles.map}
+        initialRegion={region}
+        region={region}
+        // Updates the markers when user moves the map
+        onRegionChangeComplete={(r) => setRegion(r)}
+      >
+        {visibleStations.map((s) => (
           <Marker
-            coordinate={{
-              latitude: nearby.lat,
-              longitude: nearby.lng
-            }}
+            key={s.id}
+            coordinate={{ latitude: s.lat, longitude: s.lng }}
+            title={s.name}
+            onPress={() => {}}
           >
-            <Callout tooltip>
-              <View>
-                <View style={styles.bubble}>
-                  <Text style={styles.name}> {nearby.name} </Text>
-                </View>
-                <View style={styles.arrowBorder} />
-                <View style={styles.arrow} />
+            <Callout
+              tooltip={false}
+              onPress={() => {
+                // Navigate to Home and update tide station
+                navigation.navigate("Home", {
+                  stationID: s.id,
+                  stationName: s.name,
+                });
+              }}
+            >
+              <View style={{ maxWidth: 240 }}>
+                <Text style={{ fontWeight: "700" }}>{s.name}</Text>
+                <Text style={{ marginTop: 4, color: "#555" }}>View Tide Data</Text>
               </View>
             </Callout>
           </Marker>
-
-          <Marker
-            coordinate={{
-              latitude: currentLat,
-              longitude: currentLng
-            }}
-          >
-            <View>
-              <MaterialIcons name="location-history" size={40} color="#1c4152" />
-            </View>
-          </Marker>
-        </MapView>
-      </View>
-
-      <View style={styles.favoritedTextBar}>
-        <Text style={styles.favoritedText}>
-          {nearby.name}
-        </Text>
-        <FontAwesome
-          name={favClicked ? "star" : "star-o"}
-          size={24}
-          color={favClicked ? "#FFD233" : "white"}
-          onPress={() => {
-            setFavClicked(!favClicked);
-            buildFavArray(nearby.name, !favClicked);
-            updateUserFavorites(nearby.name, nearby.id, !favClicked);
-          }}
-        />
-      </View>
+        ))}
+      </MapView>
     </View>
   );
-};
+}
 
 const styles = StyleSheet.create({
-  container: {
-    ...StyleSheet.absoluteFillObject,
-    flex: 1,
-    backgroundColor: "#fff",
-    alignItems: "center",
-    justifyContent: "center"
-  },
-  map: {
-    ...StyleSheet.absoluteFillObject,
-    height: Dimensions.get("window").height * .82,
-  },
-  bubble: {
-    flexDirection: "row",
-    alignSelf: 'align-self',
-    backgroundColor: "#356C81",
-    borderRadius: 6,
-    borderColor: "#356C81",
-    borderWidth: 0.5,
-    padding: 5,
-    width: 300,
-  },
-  name: {
-    fontSize: 20,
-    marginBottom: 5,
-    textAlign: 'center',
-    fontWeight: 'bold',
-    alignSelf: 'flex-start',
-    position: 'relative',
-    paddingLeft: 10,
-    color: "white"
-  },
-  arrow: {
-    backgroundColor: 'transparent',
-    borderColor: 'transparent',
-    borderTopColor: '#356C81',
-    borderWidth: 16,
-    alignSelf: 'center',
-    marginTop: -32,
-  },
-  arrowBorder: {
-    backgroundColor: 'transparent',
-    borderColor: 'transparent',
-    borderTopColor: '#007a87',
-    borderWidth: 16,
-    alignSelf: 'center',
-    marginTop: -0.5,
-  },
-  favButton: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 32,
-    borderRadius: 4,
-    elevation: 3,
-  },
-  favoritedText: {
-    display: 'flex',
-    fontWeight: 'bold',
-    color: "white",
-    paddingRight: 15,
-    fontSize: 20,
-  },
-  favoritedTextBar: {
-    justifyContent: 'center',
-    alignItems: 'center',
-    flexDirection: 'row',
-    marginTop: 750,
-    backgroundColor: "#084254",
-    overflow: "hidden",
-    paddingVertical: 30,
-  },
-  gradient: {
-    flex: 1,
-    backgroundColor: '#0a2d39',
-    alignItems: 'center',
-    justifyContent: 'center',
-  }
-});
+  root: { flex: 1, backgroundColor: "#081319" },
+  map: { flex: 1 },
 
-export default MapScreen;
+  searchBar: {
+    flexDirection: "row",
+    paddingTop: 12,
+    paddingHorizontal: 12,
+    paddingBottom: 10,
+    backgroundColor: "#081319",
+    alignItems: "center",
+    gap: 10,
+  },
+  searchInput: {
+    flex: 1,
+    height: 44,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: "#204B5F",
+    color: "white",
+  },
+  searchButton: {
+    height: 44,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    backgroundColor: "#F6DD7D",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  searchButtonText: {
+    color: "#204B5F",
+    fontWeight: "700",
+  },
+  center: { flex: 1, justifyContent: "center", alignItems: "center" },
+
+});
